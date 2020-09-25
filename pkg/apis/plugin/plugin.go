@@ -54,6 +54,7 @@ type UserDataRequest struct {
 	HyperkubeImage        string
 	KubeletRepository     string
 	KubeletFeatureGates   map[string]bool
+	ContainerRuntime      string
 }
 
 // UserDataResponse contains the responded user data.

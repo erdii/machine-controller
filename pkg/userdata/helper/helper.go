@@ -23,6 +23,9 @@ import (
 
 	"github.com/Masterminds/semver"
 
+	"github.com/kubermatic/machine-controller/pkg/providerconfig/types"
+	"github.com/kubermatic/machine-controller/pkg/userdata/containerruntime"
+
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
@@ -111,6 +114,15 @@ type dockerConfig struct {
 	LogOpts            map[string]string `json:"log-opts,omitempty"`
 	InsecureRegistries []string          `json:"insecure-registries,omitempty"`
 	RegistryMirrors    []string          `json:"registry-mirrors,omitempty"`
+}
+
+func InstallContainerRuntimeScript(os, cr, kubeletVersion string) (string, error) {
+	engine, err := containerruntime.NewEngine(containerruntime.Get(cr), kubeletVersion)
+	if err != nil {
+		return "", err
+	}
+
+	return engine.ScriptFor(types.OperatingSystem(os))
 }
 
 // DockerConfig returns the docker daemon.json.

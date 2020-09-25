@@ -48,11 +48,6 @@ func (p Provider) UserData(req plugin.UserDataRequest) (string, error) {
 		return "", fmt.Errorf("invalid kubelet version: %v", err)
 	}
 
-	dockerVersion, err := userdatahelper.DockerVersionYum(kubeletVersion)
-	if err != nil {
-		return "", fmt.Errorf("invalid docker version: %v", err)
-	}
-
 	pconfig, err := providerconfigtypes.GetConfig(req.MachineSpec.ProviderSpec)
 	if err != nil {
 		return "", fmt.Errorf("failed to get provider config: %v", err)
@@ -91,7 +86,6 @@ func (p Provider) UserData(req plugin.UserDataRequest) (string, error) {
 		ProviderSpec     *providerconfigtypes.Config
 		OSConfig         *Config
 		KubeletVersion   string
-		DockerVersion    string
 		ServerAddr       string
 		Kubeconfig       string
 		KubernetesCACert string
@@ -101,7 +95,6 @@ func (p Provider) UserData(req plugin.UserDataRequest) (string, error) {
 		ProviderSpec:     pconfig,
 		OSConfig:         rhelConfig,
 		KubeletVersion:   kubeletVersion.String(),
-		DockerVersion:    dockerVersion,
 		ServerAddr:       serverAddr,
 		Kubeconfig:       kubeconfigString,
 		KubernetesCACert: kubernetesCACert,
@@ -191,16 +184,9 @@ write_files:
     hostnamectl set-hostname {{ .MachineSpec.Name }}
     {{ end }}
 
-    yum install -y yum-utils
-    yum-config-manager --add-repo=https://download.docker.com/linux/centos/docker-ce.repo
-{{- /*	Due to DNF modules we have to do this on docker-ce repo
-		More info at: https://bugzilla.redhat.com/show_bug.cgi?id=1756473 */}}
-    sed -i 's/\$releasever/7/g' /etc/yum.repos.d/docker-ce.repo
-    yum-config-manager --save --setopt=docker-ce-stable.module_hotfixes=true
-
-    DOCKER_VERSION='{{ .DockerVersion }}'
-    yum install -y docker-ce-${DOCKER_VERSION} \
-      docker-ce-cli-${DOCKER_VERSION} \
+    yum install -y \
+      device-mapper-persistent-data \
+      lvm2 \
       ebtables \
       ethtool \
       nfs-utils \
@@ -214,7 +200,8 @@ write_files:
       open-vm-tools \
       {{- end }}
       ipvsadm
-    yum versionlock add docker-ce-*
+
+{{ installContainerRuntimeScript "rhel" .ContainerRuntime .KubeletVersion | indent 4 }}
 
 {{ safeDownloadBinariesScript .KubeletVersion | indent 4 }}
     # set kubelet nodeip environment variable
@@ -225,10 +212,8 @@ write_files:
     systemctl enable --now vmtoolsd.service
     {{ end -}}
 {{- /* Without this, the conformance tests fail with differing tests causing it, the common denominator: They look for some string in container logs and get an empty log */ -}}
-    systemctl enable --now docker
     systemctl enable --now kubelet
     systemctl enable --now --no-block kubelet-healthcheck.service
-    systemctl enable --now --no-block docker-healthcheck.service
 
 - path: "/opt/bin/supervise.sh"
   permissions: "0755"
@@ -287,20 +272,10 @@ write_files:
   content: |
     export PATH="/opt/bin:$PATH"
 
-- path: /etc/docker/daemon.json
-  permissions: "0644"
-  content: |
-{{ dockerConfig .InsecureRegistries .RegistryMirrors | indent 4 }}
-
 - path: /etc/systemd/system/kubelet-healthcheck.service
   permissions: "0644"
   content: |
 {{ kubeletHealthCheckSystemdUnit | indent 4 }}
-
-- path: /etc/systemd/system/docker-healthcheck.service
-  permissions: "0644"
-  content: |
-{{ containerRuntimeHealthCheckSystemdUnit | indent 4 }}
 
 {{- if or .InsecureRegistries .RegistryMirrors }}
 - path: /run/containers/registries.conf
@@ -313,12 +288,6 @@ write_files:
     REGISTRIES="{{range .RegistryMirrors}}--registry-mirror {{.}} {{end}}"
     {{- end}}
 {{- end}}
-
-- path: /etc/systemd/system/docker.service.d/environment.conf
-  permissions: "0644"
-  content: |
-    [Service]
-    EnvironmentFile=-/etc/environment
 
 rh_subscription:
 {{- if .OSConfig.RHELUseSatelliteServer }}

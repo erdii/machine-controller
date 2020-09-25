@@ -56,6 +56,7 @@ import (
 	machinehealth "github.com/kubermatic/machine-controller/pkg/health"
 	machinesv1alpha1 "github.com/kubermatic/machine-controller/pkg/machines/v1alpha1"
 	"github.com/kubermatic/machine-controller/pkg/signals"
+	"github.com/kubermatic/machine-controller/pkg/userdata/containerruntime"
 
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/klog"
@@ -85,6 +86,7 @@ var (
 	nodeHyperkubeImage      string
 	nodeKubeletRepository   string
 	nodeKubeletFeatureGates string
+	nodeContainerRuntime    string
 )
 
 const (
@@ -171,6 +173,7 @@ func main() {
 	flag.StringVar(&nodeHyperkubeImage, "node-hyperkube-image", "k8s.gcr.io/hyperkube-amd64", "Image for the hyperkube container excluding tag. Only has effect on CoreOS Container Linux and Flatcar Linux, and for kubernetes < 1.18.")
 	flag.StringVar(&nodeKubeletRepository, "node-kubelet-repository", "quay.io/poseidon/kubelet", "Repository for the kubelet container. Only has effect on Flatcar Linux, and for kubernetes >= 1.18.")
 	flag.StringVar(&nodeKubeletFeatureGates, "node-kubelet-feature-gates", "RotateKubeletServerCertificate=true", "Feature gates to set on the kubelet. Default: RotateKubeletServerCertificate=true")
+	flag.StringVar(&nodeContainerRuntime, "node-container-runtime", "docker", "container-runtime to deploy")
 	flag.BoolVar(&nodeCSRApprover, "node-csr-approver", false, "Enable NodeCSRApprover controller to automatically approve node serving certificate requests.")
 
 	flag.Parse()
@@ -273,8 +276,10 @@ func main() {
 			KubeletRepository:   nodeKubeletRepository,
 			KubeletFeatureGates: kubeletFeatureGates,
 			PauseImage:          nodePauseImage,
+			ContainerRuntime:    containerruntime.Get(nodeContainerRuntime),
 		},
 	}
+
 	if parsedJoinClusterTimeout != nil {
 		runOptions.joinClusterTimeout = parsedJoinClusterTimeout
 	}

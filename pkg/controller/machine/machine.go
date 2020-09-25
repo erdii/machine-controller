@@ -38,6 +38,7 @@ import (
 	"github.com/kubermatic/machine-controller/pkg/providerconfig"
 	providerconfigtypes "github.com/kubermatic/machine-controller/pkg/providerconfig/types"
 	"github.com/kubermatic/machine-controller/pkg/rhsm"
+	"github.com/kubermatic/machine-controller/pkg/userdata/containerruntime"
 	userdatamanager "github.com/kubermatic/machine-controller/pkg/userdata/manager"
 	userdataplugin "github.com/kubermatic/machine-controller/pkg/userdata/plugin"
 	"github.com/kubermatic/machine-controller/pkg/userdata/rhel"
@@ -131,6 +132,7 @@ type NodeSettings struct {
 	// Translates to feature gates on the kubelet.
 	// Default: RotateKubeletServerCertificate=true
 	KubeletFeatureGates map[string]bool
+	ContainerRuntime    containerruntime.ContainerRuntime
 }
 
 type KubeconfigProvider interface {
@@ -705,7 +707,9 @@ func (r *Reconciler) ensureInstanceExistsForMachine(
 				KubeletFeatureGates:   r.nodeSettings.KubeletFeatureGates,
 				NoProxy:               r.nodeSettings.NoProxy,
 				HTTPProxy:             r.nodeSettings.HTTPProxy,
+				ContainerRuntime:      r.nodeSettings.ContainerRuntime.String(),
 			}
+
 			userdata, err := userdataPlugin.UserData(req)
 			if err != nil {
 				return nil, fmt.Errorf("failed get userdata: %v", err)
