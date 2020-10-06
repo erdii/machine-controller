@@ -1,0 +1,125 @@
+/*
+Copyright 2020 The Machine Controller Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package hetzner
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/kubermatic/machine-controller/pkg/apis/cluster/v1alpha1"
+	"github.com/kubermatic/machine-controller/pkg/cloudprovider/instance"
+	anexiatypes "github.com/kubermatic/machine-controller/pkg/cloudprovider/provider/anexia/types"
+	cloudprovidertypes "github.com/kubermatic/machine-controller/pkg/cloudprovider/types"
+	"github.com/kubermatic/machine-controller/pkg/providerconfig"
+	providerconfigtypes "github.com/kubermatic/machine-controller/pkg/providerconfig/types"
+
+	"k8s.io/apimachinery/pkg/types"
+)
+
+const (
+	machineUIDLabelKey = "machine-uid"
+)
+
+type provider struct {
+	configVarResolver *providerconfig.ConfigVarResolver
+}
+
+// New returns an Anexia provider
+func New(configVarResolver *providerconfig.ConfigVarResolver) cloudprovidertypes.Provider {
+	return &provider{configVarResolver: configVarResolver}
+}
+
+type Config struct {
+	Token      string
+	VlanID     string
+	LocationID string
+	TemplateID string
+	Cpus       int
+	Memory     int
+	DiskSize   int
+	SSHKey     string
+}
+
+func (p *provider) getConfig(s v1alpha1.ProviderSpec) (*Config, *providerconfigtypes.Config, error) {
+	if s.Value == nil {
+		return nil, nil, fmt.Errorf("machine.spec.providerconfig.value is nil")
+	}
+	pconfig := providerconfigtypes.Config{}
+	err := json.Unmarshal(s.Value.Raw, &pconfig)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rawConfig := anexiatypes.RawConfig{}
+	if err = json.Unmarshal(pconfig.CloudProviderSpec.Raw, &rawConfig); err != nil {
+		return nil, nil, err
+	}
+
+	c := Config{}
+	c.Token, err = p.configVarResolver.GetConfigVarStringValueOrEnv(rawConfig.Token, "ANX_TOKEN")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get the value of \"token\" field, error = %v", err)
+	}
+
+	return &c, &pconfig, err
+}
+
+// AddDefaults adds omitted optional values to the given MachineSpec
+func (p *provider) AddDefaults(spec v1alpha1.MachineSpec) (v1alpha1.MachineSpec, error) {
+	return spec, nil
+}
+
+// Validate returns success or failure based according to its FakeCloudProviderSpec
+func (p *provider) Validate(machinespec v1alpha1.MachineSpec) error {
+	pconfig := providerconfigtypes.Config{}
+	err := json.Unmarshal(machinespec.ProviderSpec.Value.Raw, &pconfig)
+	if err != nil {
+		return err
+	}
+
+	// todo: validate
+	return nil
+}
+
+func (p *provider) Get(machine *v1alpha1.Machine, _ *cloudprovidertypes.ProviderData) (instance.Instance, error) {
+	return CloudProviderInstance{}, nil
+}
+
+func (p *provider) GetCloudConfig(spec v1alpha1.MachineSpec) (string, string, error) {
+	return "", "", nil
+}
+
+// Create creates a cloud instance according to the given machine
+func (p *provider) Create(_ *v1alpha1.Machine, _ *cloudprovidertypes.ProviderData, _ string) (instance.Instance, error) {
+	return CloudProviderInstance{}, nil
+}
+
+func (p *provider) Cleanup(_ *v1alpha1.Machine, _ *cloudprovidertypes.ProviderData) (bool, error) {
+	return true, nil
+}
+
+func (p *provider) MigrateUID(machine *v1alpha1.Machine, new types.UID) error {
+	return nil
+}
+
+func (p *provider) MachineMetricsLabels(machine *v1alpha1.Machine) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (p *provider) SetMetricsForMachines(_ v1alpha1.MachineList) error {
+	return nil
+}
