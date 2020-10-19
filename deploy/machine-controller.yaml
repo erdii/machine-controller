@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: machine-controller
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: machine-controller
+  template:
+    metadata:
+      annotations:
+        "prometheus.io/scrape": "true"
+        "prometheus.io/port": "8085"
+        "prometheus.io/path": "/metrics"
+      labels:
+        app: machine-controller
+    spec:
+      serviceAccountName: machine-controller
+      containers:
+        - image: kubermatic/machine-controller:latest
+          imagePullPolicy: IfNotPresent
+          name: machine-controller
+          command:
+            - /usr/local/bin/machine-controller
+            - -logtostderr
+            - -v=3
+            - -worker-count=5
+            - -cluster-dns=10.10.10.10
+            - -internal-listen-address=0.0.0.0:8085
+            # Machines that fail to join the cluster within this timeout and
+            # are owned by a MachineSet will get deleted so the MachineSet
+            # controller re-creates them
+            - -join-cluster-timeout=25m
+          ports:
+          - containerPort: 8085
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8085
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8085
+            periodSeconds: 5
