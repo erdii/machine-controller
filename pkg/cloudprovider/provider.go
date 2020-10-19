@@ -21,6 +21,7 @@ import (
 
 	cloudprovidercache "github.com/kubermatic/machine-controller/pkg/cloudprovider/cache"
 	"github.com/kubermatic/machine-controller/pkg/cloudprovider/provider/alibaba"
+	"github.com/kubermatic/machine-controller/pkg/cloudprovider/provider/anexia"
 	"github.com/kubermatic/machine-controller/pkg/cloudprovider/provider/aws"
 	"github.com/kubermatic/machine-controller/pkg/cloudprovider/provider/azure"
 	"github.com/kubermatic/machine-controller/pkg/cloudprovider/provider/digitalocean"
@@ -79,6 +80,9 @@ var (
 		},
 		providerconfigtypes.CloudProviderAlibaba: func(cvr *providerconfig.ConfigVarResolver) cloudprovidertypes.Provider {
 			return alibaba.New(cvr)
+		},
+		providerconfigtypes.CloudProviderAnexia: func(cvr *providerconfig.ConfigVarResolver) cloudprovidertypes.Provider {
+			return anexia.New(cvr)
 		},
 	}
 )

@@ -3,6 +3,7 @@ module github.com/kubermatic/machine-controller
 go 1.13
 
 require (
+	github.com/anexia-it/go-anxcloud v0.0.0-00010101000000-000000000000
 	cloud.google.com/go v0.38.0
 	github.com/Azure/azure-sdk-for-go v31.1.0+incompatible
 	github.com/Azure/go-autorest/autorest v0.9.4 // indirect
@@ -61,7 +62,7 @@ require (
 	go.uber.org/multierr v1.4.0 // indirect
 	go.uber.org/zap v1.13.0 // indirect
 	go4.org v0.0.0-20200104003542-c7e774b10ea0 // indirect
-	golang.org/x/crypto v0.0.0-20200214034016-1d94cc7ab1c6
+	golang.org/x/crypto v0.0.0-20201002170205-7f63de1d35b0
 	golang.org/x/lint v0.0.0-20200130185559-910be7a94367 // indirect
 	golang.org/x/mod v0.2.0 // indirect
 	golang.org/x/net v0.0.0-20200202094626-16171245cfb2 // indirect
@@ -95,6 +96,7 @@ require (
 )
 
 replace (
+	github.com/anexia-it/go-anxcloud => ../go-anxcloud
 	github.com/Azure/go-autorest => github.com/Azure/go-autorest v12.3.0+incompatible
 	github.com/coreos/prometheus-operator => github.com/coreos/prometheus-operator v0.28.0
 	k8s.io/client-go => k8s.io/client-go v0.16.4
