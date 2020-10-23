@@ -17,18 +17,29 @@ limitations under the License.
 package anexia
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/kubermatic/machine-controller/pkg/apis/cluster/common"
 	"github.com/kubermatic/machine-controller/pkg/apis/cluster/v1alpha1"
+	cloudprovidererrors "github.com/kubermatic/machine-controller/pkg/cloudprovider/errors"
 	"github.com/kubermatic/machine-controller/pkg/cloudprovider/instance"
 	anexiatypes "github.com/kubermatic/machine-controller/pkg/cloudprovider/provider/anexia/types"
 	cloudprovidertypes "github.com/kubermatic/machine-controller/pkg/cloudprovider/types"
 	"github.com/kubermatic/machine-controller/pkg/providerconfig"
 	providerconfigtypes "github.com/kubermatic/machine-controller/pkg/providerconfig/types"
 
+	anxcloud "github.com/anexia-it/go-anxcloud/pkg/client"
+
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog"
+)
+
+const (
+	machineUIDLabelKey = "machine-uid"
 )
 
 type provider struct {
@@ -37,6 +48,7 @@ type provider struct {
 
 // New returns an Anexia provider
 func New(configVarResolver *providerconfig.ConfigVarResolver) cloudprovidertypes.Provider {
+	klog.Infoln("anexia provider loaded")
 	return &provider{configVarResolver: configVarResolver}
 }
 
@@ -49,6 +61,14 @@ type Config struct {
 	Memory     int
 	DiskSize   int
 	SSHKey     string
+}
+
+func getClient() (anxcloud.Client, error) {
+	client, err := anxcloud.NewAnyClientFromEnvs(true, nil)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 func (p *provider) getConfig(s v1alpha1.ProviderSpec) (*Config, *providerconfigtypes.Config, error) {
@@ -67,7 +87,7 @@ func (p *provider) getConfig(s v1alpha1.ProviderSpec) (*Config, *providerconfigt
 	}
 
 	c := Config{}
-	c.Token, err = p.configVarResolver.GetConfigVarStringValueOrEnv(rawConfig.Token, "ANXCLOUD_TOKEN")
+	c.Token, err = p.configVarResolver.GetConfigVarStringValueOrEnv(rawConfig.Token, "ANX_TOKEN")
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get the value of \"token\" field, error = %v", err)
 	}
@@ -105,12 +125,58 @@ func (p *provider) AddDefaults(spec v1alpha1.MachineSpec) (v1alpha1.MachineSpec,
 // Validate returns success or failure based according to its FakeCloudProviderSpec
 func (p *provider) Validate(machinespec v1alpha1.MachineSpec) error {
 	klog.Infoln("anexia provider.Validate(%+v)", machinespec)
+	config, _, err := p.getConfig(machinespec.ProviderSpec)
+	if err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	if config.Token == "" {
+		return errors.New("token is missing")
+	}
+
+	if config.Cpus == 0 {
+		return errors.New("cpu count is missing")
+	}
+
+	if config.DiskSize == 0 {
+		return errors.New("disk size is missing")
+	}
+
+	if config.Memory == 0 {
+		return errors.New("memory size is missing")
+	}
+
+	if config.LocationID == "" {
+		return errors.New("location id is missing")
+	}
+
+	if config.TemplateID == "" {
+		return errors.New("template id is missing")
+	}
+
+	if config.VlanID == "" {
+		return errors.New("vlan id is missing")
+	}
+
 	return nil
 }
 
 func (p *provider) Get(machine *v1alpha1.Machine, provider *cloudprovidertypes.ProviderData) (instance.Instance, error) {
 	klog.Infoln("anexia provider.Get(machine, provider)")
-	return nil, nil
+
+	client, err := getClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+
+	return GetFromAnexia(
+		ctx,
+		machine.ObjectMeta.Name,
+		client,
+	)
 }
 
 func (p *provider) GetCloudConfig(spec v1alpha1.MachineSpec) (string, string, error) {
@@ -121,11 +187,52 @@ func (p *provider) GetCloudConfig(spec v1alpha1.MachineSpec) (string, string, er
 // Create creates a cloud instance according to the given machine
 func (p *provider) Create(machine *v1alpha1.Machine, providerData *cloudprovidertypes.ProviderData, userdata string) (instance.Instance, error) {
 	klog.Infoln("anexia provider.Create(machine, providerData, userdata)")
-	return nil, nil
+	klog.Infoln(userdata)
+
+	config, _, err := p.getConfig(machine.Spec.ProviderSpec)
+	if err != nil {
+		return nil, cloudprovidererrors.TerminalError{
+			Reason:  common.InvalidConfigurationMachineError,
+			Message: fmt.Sprintf("Failed to parse MachineSpec, due to %v", err),
+		}
+	}
+
+	client, err := getClient()
+	if err != nil {
+		return nil, cloudprovidererrors.TerminalError{
+			Reason:  common.InvalidConfigurationMachineError,
+			Message: fmt.Sprintf("Failed to create anexia api-client, due to %v", err),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	return CreateAnexiaVM(
+		ctx,
+		config,
+		machine.ObjectMeta.Name,
+		userdata,
+		client,
+	)
 }
 
 func (p *provider) Cleanup(machine *v1alpha1.Machine, _ *cloudprovidertypes.ProviderData) (bool, error) {
 	klog.Infoln("anexia provider.Cleanup(machine)")
+
+	client, err := getClient()
+	if err != nil {
+		return false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+
+	err = Remove(ctx, machine.ObjectMeta.Name, client)
+	if err != nil {
+		return false, fmt.Errorf("could not deprovision machine: %w", err)
+	}
+
 	return true, nil
 }
 
