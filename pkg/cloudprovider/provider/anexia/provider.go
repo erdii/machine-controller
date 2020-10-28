@@ -18,6 +18,7 @@ package anexia
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/kubermatic/machine-controller/pkg/apis/cluster/common"
 	"github.com/kubermatic/machine-controller/pkg/apis/cluster/v1alpha1"
+	"github.com/kubermatic/machine-controller/pkg/cloudprovider/common/ssh"
 	cloudprovidererrors "github.com/kubermatic/machine-controller/pkg/cloudprovider/errors"
 	"github.com/kubermatic/machine-controller/pkg/cloudprovider/instance"
 	anexiatypes "github.com/kubermatic/machine-controller/pkg/cloudprovider/provider/anexia/types"
@@ -32,7 +34,9 @@ import (
 	"github.com/kubermatic/machine-controller/pkg/providerconfig"
 	providerconfigtypes "github.com/kubermatic/machine-controller/pkg/providerconfig/types"
 
-	anxcloud "github.com/anexia-it/go-anxcloud/pkg/client"
+	anx "github.com/anexia-it/go-anxcloud/pkg"
+	"github.com/anexia-it/go-anxcloud/pkg/client"
+	"github.com/anexia-it/go-anxcloud/pkg/vsphere/provisioning/vm"
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog"
@@ -63,12 +67,13 @@ type Config struct {
 	SSHKey     string
 }
 
-func getClient() (anxcloud.Client, error) {
-	client, err := anxcloud.NewAnyClientFromEnvs(true, nil)
+func getAPIClient() (anx.API, error) {
+	client, err := client.NewAnyClientFromEnvs(true, nil)
 	if err != nil {
 		return nil, err
 	}
-	return client, nil
+
+	return anx.NewAPI(client), nil
 }
 
 func (p *provider) getConfig(s v1alpha1.ProviderSpec) (*Config, *providerconfigtypes.Config, error) {
@@ -164,7 +169,7 @@ func (p *provider) Validate(machinespec v1alpha1.MachineSpec) error {
 func (p *provider) Get(machine *v1alpha1.Machine, provider *cloudprovidertypes.ProviderData) (instance.Instance, error) {
 	klog.Infoln("anexia provider.Get(machine, provider)")
 
-	client, err := getClient()
+	apiClient, err := getAPIClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create client: %v", err)
 	}
@@ -172,10 +177,10 @@ func (p *provider) Get(machine *v1alpha1.Machine, provider *cloudprovidertypes.P
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
-	return GetFromAnexia(
+	return getInstanceFromAnexia(
 		ctx,
 		machine.ObjectMeta.Name,
-		client,
+		apiClient,
 	)
 }
 
@@ -197,7 +202,7 @@ func (p *provider) Create(machine *v1alpha1.Machine, providerData *cloudprovider
 		}
 	}
 
-	client, err := getClient()
+	apiClient, err := getAPIClient()
 	if err != nil {
 		return nil, cloudprovidererrors.TerminalError{
 			Reason:  common.InvalidConfigurationMachineError,
@@ -208,19 +213,68 @@ func (p *provider) Create(machine *v1alpha1.Machine, providerData *cloudprovider
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	return CreateAnexiaVM(
-		ctx,
-		config,
+	ips, err := apiClient.VSphere().Provisioning().IPs().GetFree(ctx, config.LocationID, config.VlanID)
+	if err != nil {
+		return nil, fmt.Errorf("getting free ips failed: %w", err)
+	}
+	if len(ips) < 1 {
+		return nil, fmt.Errorf("no free ip available: %w", err)
+	}
+
+	networkInterfaces := []vm.Network{{
+		NICType: "vmxnet3",
+		IPs:     []string{ips[0].Identifier},
+		VLAN:    config.VlanID,
+	}}
+
+	templateType := "templates"
+
+	definition := apiClient.VSphere().Provisioning().VM().NewDefinition(
+		config.LocationID,
+		templateType,
+		config.TemplateID,
 		machine.ObjectMeta.Name,
-		userdata,
-		client,
+		config.Cpus,
+		config.Memory,
+		config.DiskSize,
+		networkInterfaces,
 	)
+
+	encodedUserdata := base64.StdEncoding.EncodeToString(
+		[]byte(fmt.Sprintf(
+			"anexia: true\n\n#cloud-config\n%s",
+			userdata,
+		)),
+	)
+	definition.Script = encodedUserdata
+
+	sshkey, err := ssh.NewKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate ssh key: %v", err)
+	}
+
+	definition.SSH = sshkey.PublicKey
+
+	provisionResponse, err := apiClient.VSphere().Provisioning().VM().Provision(ctx, definition)
+	if err != nil {
+		return nil, fmt.Errorf("provisioning vm failed: %w", err)
+	}
+
+	_, err = apiClient.VSphere().Provisioning().Progress().AwaitCompletion(ctx, provisionResponse.Identifier)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for VM provisioning failed: %w", err)
+	}
+
+	// Sleep to work around a race condition in the anexia API
+	time.Sleep(time.Second * 5)
+
+	return getInstanceFromAnexia(ctx, machine.ObjectMeta.Name, apiClient)
 }
 
 func (p *provider) Cleanup(machine *v1alpha1.Machine, _ *cloudprovidertypes.ProviderData) (bool, error) {
 	klog.Infoln("anexia provider.Cleanup(machine)")
 
-	client, err := getClient()
+	apiClient, err := getAPIClient()
 	if err != nil {
 		return false, nil
 	}
@@ -228,7 +282,12 @@ func (p *provider) Cleanup(machine *v1alpha1.Machine, _ *cloudprovidertypes.Prov
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
-	err = Remove(ctx, machine.ObjectMeta.Name, client)
+	instance, err := getInstanceFromAnexia(ctx, machine.ObjectMeta.Name, apiClient)
+	if err != nil {
+		return false, err
+	}
+
+	err = apiClient.VSphere().Provisioning().VM().Deprovision(ctx, instance.server.Identifier, false)
 	if err != nil {
 		return false, fmt.Errorf("could not deprovision machine: %w", err)
 	}
@@ -249,4 +308,33 @@ func (p *provider) MachineMetricsLabels(machine *v1alpha1.Machine) (map[string]s
 func (p *provider) SetMetricsForMachines(machine v1alpha1.MachineList) error {
 	klog.Infoln("anexia provider.SetMetricsForMachines(machine)")
 	return nil
+}
+
+func getInstanceFromAnexia(ctx context.Context, name string, apiClient anx.API) (*anexiaServer, error) {
+	searchResult, err := apiClient.VSphere().Search().ByName(ctx, fmt.Sprintf("%%-%s", name))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(searchResult) != 1 {
+		return nil, cloudprovidererrors.ErrInstanceNotFound
+	}
+
+	vm := &searchResult[0]
+
+	powerState, err := apiClient.VSphere().PowerControl().Get(ctx, vm.Identifier)
+	if err != nil {
+		return nil, fmt.Errorf("could not get machine powerstate, due to: %w", err)
+	}
+
+	info, err := apiClient.VSphere().Info().Get(ctx, vm.Identifier)
+	if err != nil {
+		return nil, fmt.Errorf("could not get machine info, due to: %w", err)
+	}
+
+	return &anexiaServer{
+		server:     vm,
+		powerState: powerState,
+		info:       &info,
+	}, nil
 }
