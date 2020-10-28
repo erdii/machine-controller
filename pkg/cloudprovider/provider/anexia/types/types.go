@@ -25,7 +25,7 @@ import (
 const (
 	AnxTokenEnv = "ANXCLOUD_TOKEN"
 
-	CreateRequestTimeout = 30 * time.Minute
+	CreateRequestTimeout = 15 * time.Minute
 	GetRequestTimeout    = 1 * time.Minute
 	DeleteRequestTimeout = 1 * time.Minute
 
@@ -44,6 +44,7 @@ type RawConfig struct {
 }
 
 type ProviderStatus struct {
-	InstanceID string `json:"instanceID"`
+	InstanceID     string `json:"instanceID"`
+	ProvisioningID string `json:"provisioningID"`
 	// TODO: add conditions to track progress on the provider side
 }

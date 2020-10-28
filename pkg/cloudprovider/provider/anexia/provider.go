@@ -230,32 +230,32 @@ func (p *provider) Create(machine *v1alpha1.Machine, providerData *cloudprovider
 	}
 	vm.SSH = sshKey.PublicKey
 
-	klog.Infof("Provisioning a new machine %s", machine.ObjectMeta.Name)
-	provisionResponse, err := anxvm.Provision(ctx, vm, client)
+	status, err := getStatus(machine.Status.ProviderStatus)
 	if err != nil {
-		return nil, newError(common.CreateMachineError, "instance provisioning failed: %v", err)
+		return nil, newError(common.InvalidConfigurationMachineError, "failed to get machine status: %v", err)
+	}
+
+	if status.ProvisioningID == "" {
+		klog.Infof("Provisioning a new machine %s", machine.ObjectMeta.Name)
+		provisionResponse, err := anxvm.Provision(ctx, vm, client)
+		if err != nil {
+			return nil, newError(common.CreateMachineError, "instance provisioning failed: %v", err)
+		}
+		status.ProvisioningID = provisionResponse.Identifier
+		if err := updateStatus(machine, status, providerData.Update); err != nil {
+			return nil, newError(common.UpdateMachineError, "machine status update failed: %v", err)
+		}
 	}
 
 	klog.Infof("Awaiting machine %s provisioning completion", machine.ObjectMeta.Name)
-	instanceID, err := anxprog.AwaitCompletion(ctx, provisionResponse.Identifier, client)
+	instanceID, err := anxprog.AwaitCompletion(ctx, status.ProvisioningID, client)
 	if err != nil {
 		return nil, newError(common.CreateMachineError, "instance provisioning failed: %v", err)
 	}
 	klog.Infof("Machine %s provisioned", machine.ObjectMeta.Name)
 
-	status := anxtypes.ProviderStatus{
-		InstanceID: instanceID,
-	}
-	rawStatus, err := json.Marshal(status)
-	if err != nil {
-		return nil, newError(common.InvalidConfigurationMachineError, "machine status parsing failed: %v", err)
-	}
-	err = providerData.Update(machine, func(machine *v1alpha1.Machine) {
-		machine.Status.ProviderStatus = &runtime.RawExtension{
-			Raw: rawStatus,
-		}
-	})
-	if err != nil {
+	status.InstanceID = instanceID
+	if err := updateStatus(machine, status, providerData.Update); err != nil {
 		return nil, newError(common.UpdateMachineError, "machine status update failed: %v", err)
 	}
 
@@ -324,4 +324,21 @@ func newError(reason common.MachineStatusError, msg string, args ...interface{})
 		Reason:  reason,
 		Message: fmt.Sprintf(msg, args...),
 	}
+}
+
+func updateStatus(machine *v1alpha1.Machine, status *anxtypes.ProviderStatus, updater cloudprovidertypes.MachineUpdater) error {
+	rawStatus, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	err = updater(machine, func(machine *v1alpha1.Machine) {
+		machine.Status.ProviderStatus = &runtime.RawExtension{
+			Raw: rawStatus,
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
