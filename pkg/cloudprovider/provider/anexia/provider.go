@@ -41,6 +41,7 @@ import (
 	anxvm "github.com/anexia-it/go-anxcloud/pkg/provisioning/vm"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/klog"
 )
 
 type Config struct {
@@ -229,15 +230,19 @@ func (p *provider) Create(machine *v1alpha1.Machine, providerData *cloudprovider
 	}
 	vm.SSH = sshKey.PublicKey
 
+	klog.Infof("Provisioning a new machine %s", machine.ObjectMeta.Name)
 	provisionResponse, err := anxvm.Provision(ctx, vm, client)
 	if err != nil {
 		return nil, newError(common.CreateMachineError, "instance provisioning failed: %v", err)
 	}
 
+	klog.Infof("Awaiting machine %s provisioning completion", machine.ObjectMeta.Name)
 	instanceID, err := anxprog.AwaitCompletion(ctx, provisionResponse.Identifier, client)
 	if err != nil {
 		return nil, newError(common.CreateMachineError, "instance provisioning failed: %v", err)
 	}
+	klog.Infof("Machine %s provisioned", machine.ObjectMeta.Name)
+
 	status := anxtypes.ProviderStatus{
 		InstanceID: instanceID,
 	}
