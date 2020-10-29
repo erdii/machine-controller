@@ -36,7 +36,6 @@ import (
 
 	anx "github.com/anexia-it/go-anxcloud/pkg"
 	anxclient "github.com/anexia-it/go-anxcloud/pkg/client"
-
 	anxvm "github.com/anexia-it/go-anxcloud/pkg/vsphere/provisioning/vm"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
@@ -250,12 +249,10 @@ func (p *provider) Create(machine *v1alpha1.Machine, providerData *cloudprovider
 		}
 	}
 
-	klog.Infof("Awaiting machine %s provisioning completion", machine.ObjectMeta.Name)
 	instanceID, err := apiClient.VSphere().Provisioning().Progress().AwaitCompletion(ctx, status.ProvisioningID)
 	if err != nil {
 		return nil, newError(common.CreateMachineError, "instance provisioning failed: %v", err)
 	}
-	klog.Infof("Machine %s provisioned", machine.ObjectMeta.Name)
 
 	status.InstanceID = instanceID
 	if err := updateStatus(machine, status, providerData.Update); err != nil {
